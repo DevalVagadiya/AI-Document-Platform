@@ -1,0 +1,47 @@
+repos:
+  # ── Code formatting and linting ──────────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.0
+    hooks:
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+        name: "Ruff: lint + auto-fix"
+      - id: ruff-format
+        name: "Ruff: format"
+
+  # ── Type checking ────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        name: "MyPy: type check"
+        args: ["--ignore-missing-imports", "--no-strict-optional"]
+        additional_dependencies:
+          - pydantic>=2.10.0
+          - sqlalchemy[mypy]>=2.0.0
+
+  # ── General file hygiene ─────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=5000"]
+      - id: detect-private-key
+        name: "Security: detect private keys"
+      - id: no-commit-to-branch
+        args: ["--branch", "main", "--branch", "production"]
+
+  # ── Secrets scanning ─────────────────────────────────────────────────────
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        name: "Security: detect secrets"
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: ".env.example|alembic/|tests/"

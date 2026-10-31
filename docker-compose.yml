@@ -1,0 +1,160 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Document Platform — Docker Compose (production-like)
+#
+# Services:
+#   postgres   — PostgreSQL 16
+#   redis      — Redis 7 (Celery broker + result backend)
+#   chromadb   — ChromaDB vector store (HTTP server mode)
+#   api        — FastAPI application (uvicorn)
+#   worker     — Celery worker (ingestion queue)
+#   flower     — Celery monitoring UI
+# ─────────────────────────────────────────────────────────────────────────────
+
+x-env: &common-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://docuser:docpassword@postgres:5432/docplatform}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+  CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+  CHROMA_HOST: chromadb
+  CHROMA_PORT: 8000
+  SECRET_KEY: ${SECRET_KEY:-change-me-in-production-32-char-min}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:-}
+  JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:-}
+
+services:
+  # ── Infrastructure ─────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: docuser
+      POSTGRES_PASSWORD: docpassword
+      POSTGRES_DB: docplatform
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docuser -d docplatform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  chromadb:
+    image: chromadb/chroma:latest
+    restart: unless-stopped
+    volumes:
+      - chroma_data:/chroma/chroma
+    ports:
+      - "8001:8000"
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/heartbeat || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── Application ────────────────────────────────────────────────────────────
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      ENVIRONMENT: development
+      DEBUG: "false"
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    volumes:
+      - uploads_data:/app/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health/live || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    command:
+      - celery
+      - "-A"
+      - app.workers.celery_app
+      - worker
+      - "--loglevel=info"
+      - "-Q"
+      - "ingestion,default"
+      - "--concurrency=2"
+    environment:
+      <<: *common-env
+      ENVIRONMENT: development
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - uploads_data:/app/uploads
+
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    command:
+      - celery
+      - "-A"
+      - app.workers.celery_app
+      - flower
+      - "--port=5555"
+      - "--basic_auth=admin:flower_password"
+    environment:
+      <<: *common-env
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+
+volumes:
+  postgres_data:
+  redis_data:
+  chroma_data:
+  uploads_data:
