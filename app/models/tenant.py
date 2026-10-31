@@ -10,6 +10,7 @@ Design:
   ChromaDB instances.
 - ``plan`` controls feature flags and usage limits.
 - ``is_active = False`` effectively suspends the entire tenant.
+- UUID columns use the custom GUID TypeDecorator (PostgreSQL native / SQLite CHAR).
 """
 
 from __future__ import annotations
@@ -17,17 +18,16 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import Boolean, String, Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.base import TimestampMixin, new_uuid
+from app.models.base import GUID, TimestampMixin, new_uuid
 
 
 class Tenant(Base, TimestampMixin):
     __tablename__ = "tenants"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=new_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     slug: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     plan: Mapped[str] = mapped_column(String(50), default="starter", nullable=False)

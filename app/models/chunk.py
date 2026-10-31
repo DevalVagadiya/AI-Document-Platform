@@ -18,25 +18,24 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.base import TimestampMixin, new_uuid
+from app.models.base import GUID, TimestampMixin, new_uuid
 
 
 class DocumentChunk(Base, TimestampMixin):
     __tablename__ = "document_chunks"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=new_uuid)
     document_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID(),
         ForeignKey("documents.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID(), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     # Position within the document

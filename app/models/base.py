@@ -1,5 +1,5 @@
 """
-Shared ORM base class and mixins.
+Shared ORM base class, mixins, and cross-database types.
 
 Using SQLAlchemy 2.0 ``Mapped`` / ``mapped_column`` syntax throughout.
 """
@@ -8,11 +8,52 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import DateTime, func
+import sqlalchemy as sa
+from sqlalchemy import DateTime, String, func
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base  # noqa: F401  (re-exported for convenience)
+
+
+# ── Cross-database UUID type ──────────────────────────────────────────────────
+
+
+class GUID(sa.TypeDecorator):
+    """
+    Platform-independent UUID type.
+
+    - PostgreSQL: uses the native ``UUID`` type (efficient, indexed).
+    - SQLite / other: stored as ``CHAR(36)`` string.
+
+    This allows the same models to work in production (PostgreSQL) and in
+    unit tests (SQLite in-memory) without any changes.
+    """
+
+    impl = String(36)
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect: Any) -> Any:
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(PG_UUID(as_uuid=True))
+        return dialect.type_descriptor(String(36))
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        if dialect.name == "postgresql":
+            return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
+        return str(value)
+
+    def process_result_value(self, value: Any, dialect: Any) -> uuid.UUID | None:
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return value
+        return uuid.UUID(str(value))
+
 
 
 class TimestampMixin:
