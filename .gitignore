@@ -43,6 +43,10 @@ docker-compose.override.yml
 
 # Uploads & local storage
 uploads/
+backend/uploads/
+chroma_db/
+backend/chroma_db/
+*.sqlite3
 *.pdf
 *.docx
 
