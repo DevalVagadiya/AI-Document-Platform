@@ -8,12 +8,11 @@ the metadata lifecycle.
 
 from __future__ import annotations
 
-import hashlib
 import uuid
-from pathlib import Path
+from typing import BinaryIO
 
-import aiofiles
-from sqlalchemy import select
+from fastapi import UploadFile
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -24,6 +23,7 @@ from app.core.exceptions import (
     UnsupportedFileTypeError,
 )
 from app.models.document import ALLOWED_MIME_TYPES, Document
+from app.services.storage_service import storage_service
 
 
 class DocumentService:
@@ -34,36 +34,43 @@ class DocumentService:
         self,
         tenant_id: uuid.UUID,
         user_id: uuid.UUID,
-        filename: str,
-        mime_type: str,
-        content: bytes,
+        file: UploadFile,
     ) -> Document:
         """
-        Validate and persist the file, create the Document row.
-
-        The Celery task is dispatched by the router AFTER this returns.
+        Validate, stream to disk, prevent duplicates, and create the Document row.
         """
+        mime_type = file.content_type or "application/octet-stream"
         if mime_type not in ALLOWED_MIME_TYPES:
             raise UnsupportedFileTypeError(
                 f"File type {mime_type!r} not supported. Allowed: {sorted(ALLOWED_MIME_TYPES)}"
             )
 
-        if len(content) > settings.max_file_size_bytes:
+        # Stream file to storage and calculate checksum & size securely without OOM
+        relative_path, checksum, size_bytes = await storage_service.save_upload(tenant_id, file)
+
+        if size_bytes > settings.max_file_size_bytes:
+            storage_service.delete_file(relative_path)
             raise FileTooLargeError(f"File exceeds max size of {settings.MAX_FILE_SIZE_MB} MB")
 
-        checksum = hashlib.sha256(content).hexdigest()
-
-        # Store file
-        storage_path = await self._store_file(tenant_id, checksum, filename, content)
+        # Check for duplicates in the same tenant
+        existing = await self._db.execute(
+            select(Document).where(
+                Document.tenant_id == tenant_id, Document.checksum == checksum
+            )
+        )
+        if existing.scalar_one_or_none():
+            storage_service.delete_file(relative_path)
+            # Throw standard ValueError which we can map to 409 Conflict in the router
+            raise ValueError("A document with this identical content already exists.")
 
         doc = Document(
             tenant_id=tenant_id,
             uploaded_by_id=user_id,
-            filename=Path(storage_path).name,
-            original_filename=filename,
+            filename=file.filename or "unknown",
+            original_filename=file.filename or "unknown",
             mime_type=mime_type,
-            file_size_bytes=len(content),
-            storage_path=storage_path,
+            file_size_bytes=size_bytes,
+            storage_path=relative_path,
             checksum=checksum,
             status="pending",
         )
@@ -82,7 +89,12 @@ class DocumentService:
 
     async def list_for_tenant(
         self, tenant_id: uuid.UUID, skip: int = 0, limit: int = 50
-    ) -> list[Document]:
+    ) -> tuple[list[Document], int]:
+        count_result = await self._db.execute(
+            select(func.count(Document.id)).where(Document.tenant_id == tenant_id)
+        )
+        total = count_result.scalar_one()
+
         result = await self._db.execute(
             select(Document)
             .where(Document.tenant_id == tenant_id)
@@ -90,29 +102,10 @@ class DocumentService:
             .limit(limit)
             .order_by(Document.created_at.desc())
         )
-        return list(result.scalars().all())
+        return list(result.scalars().all()), total
 
     async def delete(self, document_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
         doc = await self.get_by_id(document_id, tenant_id)
+        storage_service.delete_file(doc.storage_path)
         await self._db.delete(doc)
         await self._db.flush()
-
-    # ── Storage helpers ───────────────────────────────────────────────────────
-
-    async def _store_file(
-        self,
-        tenant_id: uuid.UUID,
-        checksum: str,
-        original_filename: str,
-        content: bytes,
-    ) -> str:
-        """Write file to local storage. Returns relative path."""
-        suffix = Path(original_filename).suffix
-        rel_path = f"{tenant_id}/{checksum}{suffix}"
-        abs_path = Path(settings.LOCAL_STORAGE_PATH) / rel_path
-        abs_path.parent.mkdir(parents=True, exist_ok=True)
-
-        async with aiofiles.open(abs_path, "wb") as f:
-            await f.write(content)
-
-        return rel_path

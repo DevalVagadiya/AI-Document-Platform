@@ -7,12 +7,13 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from app.schemas.common import AppBaseModel, TimestampSchema
+from app.schemas.common import AppBaseModel, PaginatedResponse, TimestampSchema
 
 
 class DocumentResponse(TimestampSchema):
     id: uuid.UUID
     tenant_id: uuid.UUID
+    uploaded_by_id: uuid.UUID | None = None
     filename: str
     original_filename: str
     mime_type: str
@@ -31,6 +32,10 @@ class DocumentListItem(AppBaseModel):
     chunk_count: int
     file_size_bytes: int
     created_at: datetime
+
+
+class DocumentListResponse(PaginatedResponse):
+    items: list[DocumentListItem]
 
 
 class ChunkResponse(AppBaseModel):
